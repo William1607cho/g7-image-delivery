@@ -89,21 +89,31 @@ class ImageProcessor
     }
 
     /**
-     * 원본을 지정 가로로 축소해 인코딩한 바이트열을 반환합니다 (파일에 쓰지 않음).
+     * 원본을 지정 치수로 축소해 인코딩한 바이트열을 반환합니다 (파일에 쓰지 않음).
      *
-     * 세로는 가로 비율대로 따라간다. `$format` 이 `jpg` 면 JPEG 로, 아니면 WebP 로 만든다.
+     * 목표 세로는 호출자(`VariantPlan`)가 이미 가로 비율대로 계산해 두므로 그대로 받는다.
+     * imagick 에 세로를 0 으로 넘겨 "비율대로" 를 맡기지 않는 이유: `bestfit` 을 켠 채
+     * 세로 0 을 주면 `Invalid image geometry` 로 던지고, 끈 채로 맡기면 우리가 DB 에
+     * 기록한 out_height 와 실제 파일이 어긋날 여지가 생긴다. 둘 다 명시해 한 곳에서 정한다.
      *
      * @param  string  $absolutePath  원본 절대 경로
      * @param  int  $targetWidth  목표 가로
+     * @param  int  $targetHeight  목표 세로 (VariantPlan 계산값)
      * @param  string  $format  `webp` | `jpg`
      * @param  int  $quality  품질 (코어 `attachment.image_quality`)
      * @return string|null 인코딩 결과, 실패 시 null
      */
-    public function encodeResized(string $absolutePath, int $targetWidth, string $format, int $quality): ?string
-    {
-        return $this->withImage($absolutePath, function (\Imagick $imagick) use ($targetWidth, $format, $quality): ?string {
-            // 세로 0 = 가로 비율대로 (업스케일은 호출자가 이미 배제했다)
-            $imagick->resizeImage($targetWidth, 0, \Imagick::FILTER_LANCZOS, 1, true);
+    public function encodeResized(
+        string $absolutePath,
+        int $targetWidth,
+        int $targetHeight,
+        string $format,
+        int $quality
+    ): ?string {
+        return $this->withImage($absolutePath, function (\Imagick $imagick) use (
+            $targetWidth, $targetHeight, $format, $quality
+        ): ?string {
+            $imagick->resizeImage($targetWidth, $targetHeight, \Imagick::FILTER_LANCZOS, 1, false);
             $imagick->stripImage();
 
             return $this->encode($imagick, $format, $quality);

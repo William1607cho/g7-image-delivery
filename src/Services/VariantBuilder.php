@@ -116,7 +116,9 @@ class VariantBuilder
                 continue;
             }
 
-            $blob = $this->processor->encodeResized($absolute, $plan['out_width'], $plan['format'], $quality);
+            $blob = $this->processor->encodeResized(
+                $absolute, $plan['out_width'], $plan['out_height'], $plan['format'], $quality
+            );
 
             if ($blob === null || $blob === '') {
                 Log::warning('[g7-image-delivery] 변환본 인코딩 실패', [
