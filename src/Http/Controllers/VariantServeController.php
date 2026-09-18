@@ -46,9 +46,12 @@ class VariantServeController extends PublicBaseController
             return $this->missing();
         }
 
+        // 표식 행(width = 0, status = skipped)은 폭 화이트리스트에서 이미 걸러지지만,
+        // 상태로 한 번 더 좁혀 "실제 변환본" 만 서빙 대상이 되게 한다.
         $variant = ImageVariant::query()
             ->where('upload_hash', $hash)
             ->where('width', $width)
+            ->where('status', ImageVariant::STATUS_READY)
             ->first();
 
         if ($variant === null || ! hash_equals($variant->token, $token)) {

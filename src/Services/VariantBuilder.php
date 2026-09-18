@@ -33,7 +33,10 @@ class VariantBuilder
      */
     public function buildPending(int $limit, bool $dryRun = false): array
     {
-        $result = ['scanned' => 0, 'built' => 0, 'skipped' => 0, 'failed' => 0, 'items' => []];
+        $result = [
+            'scanned' => 0, 'built' => 0, 'skipped' => 0, 'failed' => 0,
+            'already_marked' => 0, 'newly_marked' => 0, 'items' => [],
+        ];
 
         if (! $this->processor->isUsable()) {
             $result['items'][] = ['status' => 'aborted', 'reason' => 'imagick_unavailable'];
@@ -42,6 +45,7 @@ class VariantBuilder
         }
 
         $quality = $this->quality();
+        $result['already_marked'] = $this->markedCount();
 
         foreach ($this->pendingUploads($limit) as $upload) {
             $result['scanned']++;
@@ -54,6 +58,19 @@ class VariantBuilder
                 'failed' => $result['failed']++,
                 default => $result['skipped']++,
             };
+
+            // 결론이 달라지지 않을 사유만 표식으로 남겨 다음 실행의 후보에서 뺀다.
+            $reason = $outcome['reason'] ?? null;
+            if ($reason !== null && in_array($reason, self::PERMANENT_SKIP_REASONS, true)) {
+                $result['newly_marked']++;
+
+                if (! $dryRun) {
+                    [$w, $h] = array_pad(
+                        array_map('intval', explode('x', (string) ($outcome['src'] ?? ''))), 2, 0
+                    );
+                    $this->mark($upload, $reason, $w, $h);
+                }
+            }
         }
 
         return $result;
@@ -139,6 +156,8 @@ class VariantBuilder
             ImageVariant::query()->updateOrCreate(
                 ['upload_hash' => $upload->hash, 'width' => $plan['width']],
                 [
+                    'status' => ImageVariant::STATUS_READY,
+                    'skip_reason' => null,
                     'format' => $plan['format'],
                     'token' => VariantPath::token(
                         $upload->hash, $plan['width'], $plan['format'], $generatedAt->getTimestamp(), strlen($blob)
@@ -149,6 +168,9 @@ class VariantBuilder
                     'src_height' => $size['height'],
                     'out_width' => $plan['out_width'],
                     'out_height' => $plan['out_height'],
+                    'src_path' => (string) $upload->file_path,
+                    'src_bytes' => (int) $upload->file_size,
+                    'src_mime' => (string) $upload->mime_type,
                     'generated_at' => $generatedAt,
                 ]
             );
@@ -190,6 +212,7 @@ class VariantBuilder
                 $result['items'][] = [
                     'hash' => $variant->upload_hash,
                     'width' => $variant->width,
+                    'kind' => $variant->status === ImageVariant::STATUS_SKIPPED ? '표식' : '변환본',
                     'status' => $dryRun ? 'would_delete' : 'deleted',
                 ];
 
@@ -197,10 +220,14 @@ class VariantBuilder
                     continue;
                 }
 
-                $this->storage()->delete(VariantPath::CATEGORY, $variant->path);
-                $this->storage()->deleteDirectory(
-                    VariantPath::CATEGORY, VariantPath::relativeDirectory($variant->upload_hash)
-                );
+                // 표식 행에는 대응하는 파일이 없다 — 행만 지운다.
+                if ($variant->status !== ImageVariant::STATUS_SKIPPED) {
+                    $this->storage()->delete(VariantPath::CATEGORY, $variant->path);
+                    $this->storage()->deleteDirectory(
+                        VariantPath::CATEGORY, VariantPath::relativeDirectory($variant->upload_hash)
+                    );
+                }
+
                 $variant->delete();
                 $result['deleted']++;
             }
@@ -230,7 +257,18 @@ class VariantBuilder
     /**
      * 변환본을 아직 만들지 않은 원본 목록.
      *
-     * "변환본 행이 하나도 없는 원본" 을 대상으로 한다 — 폭별 부분 생성은 buildFor 가 메운다.
+     * 후보에서 빠지는 경우는 둘이다.
+     *
+     *  1. **실제 변환본 행이 있다** (`status = ready`) — 이미 만들었다.
+     *  2. **유효한 표식 행이 있다** (`status = skipped`) — 만들 필요가 없다고 이미 판정했다.
+     *
+     * 2번이 이 버전에서 더해진 부분이다. 표식이 없던 v0.1.0 은 "변환본이 안 생기는 원본"
+     * (가로가 공칭 폭보다 좁은 경우 등)을 매 실행마다 다시 뽑았고, 그런 원본이 id 순으로
+     * `--limit` 개 이상 연달아 있으면 배치가 거기서 영구히 멈췄다.
+     *
+     * 표식은 **그때 적어 둔 `file_path`·`file_size`·`mime_type` 이 지금 값과 모두 같을 때만**
+     * 인정한다. 해시는 제자리 변환 뒤에도 그대로라 해시만으로는 원본이 바뀐 것을 알 수 없기
+     * 때문이다. 셋 중 하나라도 달라지면 표식은 효력을 잃고 원본이 다시 후보가 된다.
      *
      * @return \Illuminate\Support\Collection<int, Ckeditor5ImageUpload>
      */
@@ -243,16 +281,90 @@ class VariantBuilder
             ->whereNotExists(function ($query) use ($table) {
                 $query->selectRaw('1')
                     ->from($table)
-                    ->whereColumn($table.'.upload_hash', 'ckeditor5_image_uploads.hash');
+                    ->whereColumn($table.'.upload_hash', 'ckeditor5_image_uploads.hash')
+                    ->where(function ($outer) use ($table) {
+                        $outer->where($table.'.status', ImageVariant::STATUS_READY)
+                            ->orWhere(function ($marker) use ($table) {
+                                $marker->where($table.'.status', ImageVariant::STATUS_SKIPPED)
+                                    ->whereColumn($table.'.src_path', 'ckeditor5_image_uploads.file_path')
+                                    ->whereColumn($table.'.src_bytes', 'ckeditor5_image_uploads.file_size')
+                                    ->whereColumn($table.'.src_mime', 'ckeditor5_image_uploads.mime_type');
+                            });
+                    });
             })
             ->orderBy('id')
             ->limit(max(1, $limit))
             ->get();
     }
 
+    /**
+     * 지금 유효한 표식 행의 수 (dry-run 보고용).
+     */
+    public function markedCount(): int
+    {
+        $table = (new ImageVariant)->getTable();
+
+        return Ckeditor5ImageUpload::query()
+            ->whereExists(function ($query) use ($table) {
+                $query->selectRaw('1')
+                    ->from($table)
+                    ->whereColumn($table.'.upload_hash', 'ckeditor5_image_uploads.hash')
+                    ->where($table.'.status', ImageVariant::STATUS_SKIPPED)
+                    ->whereColumn($table.'.src_path', 'ckeditor5_image_uploads.file_path')
+                    ->whereColumn($table.'.src_bytes', 'ckeditor5_image_uploads.file_size')
+                    ->whereColumn($table.'.src_mime', 'ckeditor5_image_uploads.mime_type');
+            })
+            ->count();
+    }
+
+    /**
+     * "변환본을 만들 필요가 없다" 표식을 남깁니다.
+     *
+     * **영구 사유에만** 남긴다 — 같은 파일을 다시 검사해도 결론이 달라지지 않는 경우다.
+     * 파일이 잠깐 없거나(복구될 수 있다) 자원 한도에 걸려 실패한 경우는 남기지 않는다.
+     * 그런 원본은 다음 실행에서 다시 시도된다.
+     */
+    private function mark(Ckeditor5ImageUpload $upload, string $reason, int $srcWidth = 0, int $srcHeight = 0): void
+    {
+        ImageVariant::query()->updateOrCreate(
+            ['upload_hash' => $upload->hash, 'width' => 0],
+            [
+                'status' => ImageVariant::STATUS_SKIPPED,
+                'skip_reason' => $reason,
+                'format' => '',
+                'token' => '',
+                'path' => '',
+                'byte_size' => 0,
+                'src_width' => $srcWidth,
+                'src_height' => $srcHeight,
+                'out_width' => 0,
+                'out_height' => 0,
+                'src_path' => (string) $upload->file_path,
+                'src_bytes' => (int) $upload->file_size,
+                'src_mime' => (string) $upload->mime_type,
+                'generated_at' => Carbon::now(),
+            ]
+        );
+    }
+
+    /**
+     * 표식을 남기는 영구 사유 목록.
+     *
+     * 여기 없는 사유(파일 없음·ping 실패·인코딩 실패)는 일시적일 수 있어 표식하지 않는다.
+     */
+    private const PERMANENT_SKIP_REASONS = [
+        'no_downscale_needed',
+        'source_pixel_cap',
+        'gif_not_targeted',
+    ];
+
     private function variantExists(string $hash, int $width): bool
     {
-        return ImageVariant::query()->where('upload_hash', $hash)->where('width', $width)->exists();
+        return ImageVariant::query()
+            ->where('upload_hash', $hash)
+            ->where('width', $width)
+            ->where('status', ImageVariant::STATUS_READY)
+            ->exists();
     }
 
     private function storage(): PluginStorageDriver

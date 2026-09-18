@@ -52,6 +52,13 @@ class BuildVariantsCommand extends Command
             $result['skipped'],
             $result['failed']
         ));
+        $this->line(sprintf(
+            '  표식으로 제외된 원본 %d건%s',
+            $result['already_marked'],
+            $result['newly_marked'] > 0
+                ? sprintf(' (이번에 %s %d건)', $dryRun ? '표식 예정' : '표식 추가', $result['newly_marked'])
+                : ''
+        ));
 
         return $result['failed'] > 0 ? self::FAILURE : self::SUCCESS;
     }

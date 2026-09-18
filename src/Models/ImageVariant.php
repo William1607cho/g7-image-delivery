@@ -24,13 +24,21 @@ class ImageVariant extends Model
 {
     protected $table = 'imgdel_variants';
 
+    /** 실제 변환본 행. */
+    public const STATUS_READY = 'ready';
+
+    /** "이 원본은 변환본을 만들 필요가 없다" 표식 행 (width = 0). */
+    public const STATUS_SKIPPED = 'skipped';
+
     protected $fillable = [
-        'upload_hash', 'width', 'format', 'token', 'path',
-        'byte_size', 'src_width', 'src_height', 'out_width', 'out_height', 'generated_at',
+        'upload_hash', 'width', 'status', 'skip_reason', 'format', 'token', 'path',
+        'byte_size', 'src_width', 'src_height', 'out_width', 'out_height',
+        'src_path', 'src_bytes', 'src_mime', 'generated_at',
     ];
 
     protected $casts = [
         'width' => 'integer',
+        'src_bytes' => 'integer',
         'byte_size' => 'integer',
         'src_width' => 'integer',
         'src_height' => 'integer',

@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-19
+
+### Fixed
+
+- Batch variant generation could stall permanently. Candidates were selected as "originals with no
+  variant row", but an original that can never produce a variant — one narrower than the smallest
+  nominal width, for example — never got a row, so it was picked again on every run. Where enough
+  such originals sat next to each other in id order, a batch spent its whole `--limit` re-examining
+  them, built nothing, and the next batch saw exactly the same window. The scheduled task uses the
+  same limit, so a backlog would stop advancing at that point and never finish. On one site, 142 of
+  369 originals were in this state, with 28 of them consecutive against a batch size of 20.
+
+  Such originals are now recorded with a skip marker and drop out of the candidate set, so batches
+  keep moving. The marker also stops the scheduler from reopening the same files every ten minutes.
+
+  A marker is written only for reasons that cannot change for the same file (nothing to downscale,
+  source pixel cap, GIF). A missing file or a failed encode is treated as temporary and retried.
+
+  A marker records the original's path, byte size and MIME type at the time it was written, and is
+  honoured only while all three still match. The image hash deliberately survives in-place
+  conversion, so it cannot be used to detect that the original changed; converting or reverting an
+  original therefore invalidates its marker on its own and the original becomes a candidate again.
+
+### Changed
+
+- `build-variants` now reports how many originals are excluded by a marker, and how many markers the
+  run added (or would add, in a dry run).
+
 ## [0.1.0] - 2026-09-19
 
 ### Added
