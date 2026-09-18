@@ -1,0 +1,20 @@
+{
+    "name": "plugins/g7-image-delivery",
+    "description": "Serves editor-uploaded body images with fewer bytes on Gnuboard7 — pre-built resized WebP variants with srcset, lazy loading, a link to the original, and an artisan-only in-place PNG/JPEG to WebP conversion that keeps the image hash so post bodies are never modified.",
+    "type": "library",
+    "version": "0.1.0",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "William Cho"
+        }
+    ],
+    "require": {
+        "php": "^8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Plugins\\G7\\Image\\Delivery\\": ["src/", "./"]
+        }
+    }
+}
