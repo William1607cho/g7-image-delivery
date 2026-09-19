@@ -181,8 +181,12 @@ class RewriteBodyImagesExtension
      */
     private function variantsFor(array $hashes): array
     {
+        // **실제 변환본만** 본다. 표식 행(status = skipped, width = 0)은 "만들 필요가 없다" 는
+        // 기록일 뿐 파일이 없다 — 이것을 변환본으로 오인하면 `…-0-.webp` 같은 죽은 주소와
+        // `0w` 서술자가 마크업에 실린다.
         $rows = ImageVariant::query()
             ->whereIn('upload_hash', $hashes)
+            ->where('status', ImageVariant::STATUS_READY)
             ->orderBy('width')
             ->get()
             ->groupBy('upload_hash');

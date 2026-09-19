@@ -191,6 +191,13 @@ final class BodyImageRewriter
 
         $hash = strtolower($matches[1]);
         $variant = $this->variants[$hash] ?? null;
+
+        // 쓸 수 없는 변환본 정보는 "변환본 없음" 으로 다룬다.
+        // (표식 행처럼 폭이 0 이거나 주소가 빈 항목이 섞여 들어오면 `…-0-.webp` 같은 죽은
+        //  주소와 `0w` 서술자가 마크업에 실린다 — 실제로 한 번 그랬다.)
+        if ($variant !== null && ! $this->usableVariant($variant)) {
+            $variant = null;
+        }
         $selfClosing = (bool) preg_match('/\/\s*>$/', $tag);
 
         $kept = [];
@@ -247,6 +254,19 @@ final class BodyImageRewriter
 
         return '<a href="'.$this->escapeAttribute(VariantPath::originalUrl($hash))
             .'" target="_blank" rel="noopener">'.$rebuilt.'</a>';
+    }
+
+    /**
+     * 변환본 정보가 마크업에 쓸 만한지 판정합니다.
+     *
+     * @param  array{src?: string, srcset?: string, width?: int, height?: int}  $variant
+     */
+    private function usableVariant(array $variant): bool
+    {
+        return ! empty($variant['src'])
+            && ! empty($variant['srcset'])
+            && (int) ($variant['width'] ?? 0) > 0
+            && (int) ($variant['height'] ?? 0) > 0;
     }
 
     /**

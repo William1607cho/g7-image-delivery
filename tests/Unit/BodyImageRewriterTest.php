@@ -228,6 +228,40 @@ class BodyImageRewriterTest extends TestCase
         $this->assertStringContainsString('srcset=', $out);
     }
 
+    public function test_폭이_0_인_변환본_정보는_변환본_없음으로_다룬다(): void
+    {
+        // 표식 행(생성 불필요)이 변환본으로 잘못 섞여 들어온 상황. 예전에 실제로 그래서
+        // `…-0-.webp` 주소와 `0w` 서술자가 본문에 실렸다.
+        $rewriter = new BodyImageRewriter([
+            self::HASH => [
+                'src' => '/api/plugins/g7-image-delivery/variants/'.self::HASH.'-0-.webp',
+                'srcset' => '/api/plugins/g7-image-delivery/variants/'.self::HASH.'-0-.webp 0w',
+                'width' => 0,
+                'height' => 0,
+            ],
+        ], true);
+
+        $out = $rewriter->rewrite($this->img());
+
+        $this->assertStringNotContainsString('-0-', $out);
+        $this->assertStringNotContainsString('0w', $out);
+        $this->assertStringNotContainsString('srcset', $out);
+        $this->assertStringContainsString('src="/api/plugins/sirsoft-ckeditor5/images/'.self::HASH.'"', $out);
+        $this->assertStringContainsString('loading="lazy"', $out);
+    }
+
+    public function test_주소가_빈_변환본_정보도_변환본_없음으로_다룬다(): void
+    {
+        $rewriter = new BodyImageRewriter([
+            self::HASH => ['src' => '', 'srcset' => '', 'width' => 960, 'height' => 540],
+        ], true);
+
+        $out = $rewriter->rewrite($this->img());
+
+        $this->assertStringNotContainsString('srcset', $out);
+        $this->assertStringContainsString('src="/api/plugins/sirsoft-ckeditor5/images/'.self::HASH.'"', $out);
+    }
+
     public function test_변환본_맵에_없는_해시는_변환본_없음으로_다룬다(): void
     {
         $other = '<img src="/api/plugins/sirsoft-ckeditor5/images/aaaaaaaaaaaa">';

@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversion, so it cannot be used to detect that the original changed; converting or reverting an
   original therefore invalidates its marker on its own and the original becomes a candidate again.
 
+  Skip markers are records, not files, so they are excluded wherever a real variant is expected: the
+  body rewriter, the public endpoint, and the check for an already-built width. The rewriter also
+  treats any variant entry with a zero width or an empty URL as "no variant", so a stray record can
+  never reach the markup.
+
 ### Changed
 
 - `build-variants` now reports how many originals are excluded by a marker, and how many markers the
