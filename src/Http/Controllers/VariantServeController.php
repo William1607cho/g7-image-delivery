@@ -42,7 +42,7 @@ class VariantServeController extends PublicBaseController
     {
         $width = (int) $width;
 
-        if (! in_array($width, VariantPlan::NOMINAL_WIDTHS, true)) {
+        if (! in_array($width, VariantPlan::BUILD_WIDTHS, true)) {
             return $this->missing();
         }
 

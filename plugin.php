@@ -138,6 +138,9 @@ class Plugin extends AbstractPlugin
      * 코어 게이트(`ExtensionMiddlewareGate`)가 요청 라우트명을 `targets` 와 대조해
      * 맞을 때만 실행하므로, 다른 API 응답에는 영향이 없다.
      *
+     * 0.2.0 에서 게시판 목록 두 개를 더했다 — 목록의 `thumbnail`(맨 URL)을 240 변환본
+     * 주소로 바꾸기 위해서다. 미들웨어가 라우트명으로 본문 경로와 목록 경로를 가른다.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function getMiddleware(): array
@@ -150,6 +153,11 @@ class Plugin extends AbstractPlugin
                 'targets' => [
                     'api.modules.sirsoft-board.boards.posts.show',
                     'api.modules.sirsoft-board.boards.posts.comments.index',
+                    // 0.2.0 — 목록 `thumbnail` 을 240 변환본으로 다시 쓴다.
+                    // 이 둘은 본문 HTML 이 없고 thumbnail 만 실려, 미들웨어가 라우트명으로
+                    // 갈라 다른 경로를 탄다(RewriteBodyImagesExtension::THUMBNAIL_TARGETS).
+                    'api.modules.sirsoft-board.boards.posts.index',
+                    'api.modules.sirsoft-board.admin.board.posts.index',
                 ],
             ],
         ];

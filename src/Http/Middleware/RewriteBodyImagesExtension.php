@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Plugins\G7\Image\Delivery\Models\ImageVariant;
 use Plugins\G7\Image\Delivery\Support\BodyImageRewriter;
+use Plugins\G7\Image\Delivery\Support\ThumbnailUrlRewriter;
 use Plugins\G7\Image\Delivery\Support\VariantPath;
 use Plugins\G7\Image\Delivery\Support\VariantPlan;
 use Plugins\Sirsoft\Ckeditor5\Models\Ckeditor5ImageUpload;
@@ -32,6 +33,20 @@ class RewriteBodyImagesExtension
     /** 본문에 이 조각이 없으면 볼 것도 없다. */
     private const MARKER = '/api/plugins/sirsoft-ckeditor5/images/';
 
+    /**
+     * 목록 `thumbnail` 필드를 다시 쓰는 라우트 (0.2.0).
+     *
+     * 이 라우트들의 응답에는 본문 HTML 이 없고 `thumbnail` 이 **맨 URL 문자열**로 실린다.
+     * 본문 경로와 산출물이 전혀 달라(한쪽은 `<img srcset sizes …>`, 한쪽은 URL 하나)
+     * 같은 훑기에 섞지 않고 라우트로 갈라 처리한다. 덕분에 글 상세·댓글 응답의
+     * 코드 경로는 0.1.1 과 한 줄도 다르지 않다.
+     */
+    private const THUMBNAIL_TARGETS = [
+        'api.modules.sirsoft-board.boards.posts.index',
+        'api.modules.sirsoft-board.admin.board.posts.index',
+    ];
+
+
     public function handle(Request $request, Closure $next): mixed
     {
         $response = $next($request);
@@ -42,6 +57,10 @@ class RewriteBodyImagesExtension
 
         if (! plugin_setting(VariantPath::IDENTIFIER, 'enabled', true)) {
             return $response;
+        }
+
+        if (in_array($request->route()?->getName(), self::THUMBNAIL_TARGETS, true)) {
+            return $this->rewriteThumbnails($response);
         }
 
         try {
@@ -86,6 +105,86 @@ class RewriteBodyImagesExtension
 
             return $response;
         }
+    }
+
+    /**
+     * 목록 응답의 `thumbnail` 을 240 변환본 주소로 바꿉니다 (0.2.0).
+     *
+     * ## 코어의 판정을 다시 하지 않는다
+     *
+     * 규칙이 "문자열이 에디터 해시 주소일 때만 치환" 이므로, 코어가 비밀글·권한 판정으로
+     * `null` 을 내보낸 자리는 **애초에 대상이 아니다**. 블라인드·삭제 글도 코어가 값을
+     * 내보냈으면 그대로 치환되고, 내보내지 않았으면 건드릴 수 없다. 확장이 권한 게이트를
+     * 복제할 일이 없다.
+     *
+     * ## 조회 1회
+     *
+     * 응답을 한 번 훑어 해시를 모으고(조회 0), 그 해시 집합으로 240 행을 **한 번에**
+     * 읽은 뒤(조회 1), 다시 훑으며 바꾼다. 항목 수와 무관하게 질의는 1회다.
+     *
+     * 변환본이 없는 해시는 맵에 없으므로 **원본 주소가 그대로 남는다** — 폴백이 예외 처리가
+     * 아니라 기본 동작이다.
+     */
+    private function rewriteThumbnails(JsonResponse $response): JsonResponse
+    {
+        try {
+            $data = $response->getData(true);
+
+            if (! is_array($data)) {
+                return $response;
+            }
+
+            $hashes = [];
+            ThumbnailUrlRewriter::collect($data, $hashes);
+
+            if ($hashes === []) {
+                return $response;
+            }
+
+            $urls = $this->thumbnailUrlsFor($hashes);
+
+            if ($urls === []) {
+                return $response;
+            }
+
+            $changed = false;
+            $rewritten = ThumbnailUrlRewriter::rewrite($data, $urls, $changed);
+
+            if (! $changed) {
+                return $response;
+            }
+
+            // 본문 경로와 같은 이유로 setData 를 쓴다 — 이 응답이 쥐고 있는 인코딩 옵션
+            // 그대로 되쓰므로 우리가 바꾼 문자열 말고는 바이트가 같다.
+            $response->setData($rewritten);
+
+            return $response;
+        } catch (\Throwable $e) {
+            Log::warning('[g7-image-delivery] 목록 썸네일 가공 실패 (원본 응답을 그대로 내보냅니다)', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return $response;
+        }
+    }
+
+    /**
+     * 해시 → 240 변환본 공개 URL 맵 (조회 1회).
+     *
+     * 항목 수와 무관하게 질의는 한 번이다. `(upload_hash, status)` 인덱스를 그대로 쓴다.
+     *
+     * @param  list<string>  $hashes
+     * @return array<string, string>
+     */
+    private function thumbnailUrlsFor(array $hashes): array
+    {
+        return ImageVariant::query()
+            ->whereIn('upload_hash', $hashes)
+            ->where('width', VariantPlan::THUMB_WIDTH)
+            ->where('status', ImageVariant::STATUS_READY)
+            ->get()
+            ->mapWithKeys(fn ($variant) => [(string) $variant->upload_hash => $variant->publicUrl()])
+            ->all();
     }
 
     /**
@@ -184,9 +283,14 @@ class RewriteBodyImagesExtension
         // **실제 변환본만** 본다. 표식 행(status = skipped, width = 0)은 "만들 필요가 없다" 는
         // 기록일 뿐 파일이 없다 — 이것을 변환본으로 오인하면 `…-0-.webp` 같은 죽은 주소와
         // `0w` 서술자가 마크업에 실린다.
+        //
+        // 폭도 **본문용으로 한정**한다(0.2.0). 목록 썸네일용 240 행이 여기 섞여 들어오면
+        // `$base` 폴백이 그것을 집어 본문 `src` 가 240px 로 바뀌고, srcset 에도 쓸모없는
+        // 240w 후보가 실린다. 질의에서 잘라내면 아래 조립부는 0.1.1 과 같은 집합을 본다.
         $rows = ImageVariant::query()
             ->whereIn('upload_hash', $hashes)
             ->where('status', ImageVariant::STATUS_READY)
+            ->whereIn('width', VariantPlan::BODY_SRCSET_WIDTHS)
             ->orderBy('width')
             ->get()
             ->groupBy('upload_hash');
@@ -204,7 +308,7 @@ class RewriteBodyImagesExtension
         $out = [];
 
         foreach ($rows as $hash => $variants) {
-            $base = $variants->firstWhere('width', VariantPlan::NOMINAL_WIDTHS[0]) ?? $variants->first();
+            $base = $variants->firstWhere('width', VariantPlan::BODY_BASE_WIDTH) ?? $variants->first();
 
             if ($base === null) {
                 continue;

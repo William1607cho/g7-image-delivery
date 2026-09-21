@@ -2,7 +2,7 @@
     "name": "plugins/g7-image-delivery",
     "description": "Serves editor-uploaded body images with fewer bytes on Gnuboard7 — pre-built resized WebP variants with srcset, lazy loading, a link to the original, and an artisan-only in-place PNG/JPEG to WebP conversion that keeps the image hash so post bodies are never modified.",
     "type": "library",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "license": "MIT",
     "authors": [
         {
