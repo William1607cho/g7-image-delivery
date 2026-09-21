@@ -12,14 +12,51 @@ namespace Plugins\G7\Image\Delivery\Support;
 final class VariantPlan
 {
     /**
-     * 공칭 폭 목록.
+     * 본문 `<img src>` 가 가리키는 기준 폭.
      *
      * 근거(작업 2-1 F1 실측): 본문 실폭은 데스크톱 848 CSS px
      * (`max-w-4xl` 896 − 본문 카드 `p-6` 좌우 48), 모바일은 뷰포트 − 80 px
-     * (`px-4` 32 + `p-6` 48). 960 이 데스크톱 DPR1·모바일 DPR3 를, 1600 이
-     * 데스크톱 DPR2(1696 에 6% 못 미치나 용량 대비 타당)를 덮는다.
+     * (`px-4` 32 + `p-6` 48). 960 이 데스크톱 DPR1·모바일 DPR3 를 덮는다.
+     *
+     * **폭 목록의 첫 원소로 이 값을 꺼내 쓰지 않는다.** 0.2.0 에서 목록 썸네일용
+     * 240 을 생성 폭에 더하면서, 인덱스로 의미를 꺼내던 코드가 조용히 240 을
+     * 본문 기준으로 잡는 사고 경로가 생겼다. 의미마다 상수를 따로 둔다.
      */
-    public const NOMINAL_WIDTHS = [960, 1600];
+    public const BODY_BASE_WIDTH = 960;
+
+    /**
+     * 본문 `srcset` 후보로 내보내는 폭 목록.
+     *
+     * 1600 이 데스크톱 DPR2(1696 에 6% 못 미치나 용량 대비 타당)를 덮는다.
+     * **목록 썸네일 폭(240)은 여기에 넣지 않는다** — 본문 표시폭이 848 CSS px 라
+     * 240 후보는 쓸모가 없고, 브라우저가 고를 여지만 만든다.
+     */
+    public const BODY_SRCSET_WIDTHS = [960, 1600];
+
+    /**
+     * 생성하는 폭 중 가장 큰 값 (원본 srcset 후보 판정 기준).
+     *
+     * {@see self::originalCandidateWidth()} 가 "이 폭보다 큰 원본은 변환본이 생기므로
+     * 원본 후보가 불필요하다" 를 판정할 때 쓴다.
+     */
+    public const BODY_MAX_WIDTH = 1600;
+
+    /**
+     * 목록 썸네일 전용 폭 (0.2.0 신설).
+     *
+     * 근거: 게시판 목록의 정사각 썸네일은 `w-20 h-20` = 80×80 CSS px 이다.
+     * 240 이 DPR3 까지 덮는다. 본문 경로에서는 이 폭을 쓰지 않는다.
+     */
+    public const THUMB_WIDTH = 240;
+
+    /**
+     * 실제로 생성할 폭 전체 (오름차순).
+     *
+     * 생성 계획({@see self::variantsFor()})과 공개 서빙 허용 목록
+     * ({@see \Plugins\G7\Image\Delivery\Http\Controllers\VariantServeController})만
+     * 이 목록을 쓴다. **본문 렌더링 경로는 이 상수를 읽지 않는다.**
+     */
+    public const BUILD_WIDTHS = [self::THUMB_WIDTH, 960, 1600];
 
     /**
      * WebP 컨테이너가 표현할 수 있는 최대 가로·세로 (픽셀).
@@ -61,7 +98,7 @@ final class VariantPlan
 
         $plans = [];
 
-        foreach (self::NOMINAL_WIDTHS as $nominal) {
+        foreach (self::BUILD_WIDTHS as $nominal) {
             if ($srcWidth <= $nominal) {
                 continue;
             }
@@ -100,7 +137,7 @@ final class VariantPlan
         }
 
         // 1600 변환본이 생기면(= 원본이 1600 보다 크면) 원본 후보는 불필요하다.
-        if ($srcWidth > self::NOMINAL_WIDTHS[count(self::NOMINAL_WIDTHS) - 1]) {
+        if ($srcWidth > self::BODY_MAX_WIDTH) {
             return null;
         }
 

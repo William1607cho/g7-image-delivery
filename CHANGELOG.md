@@ -5,6 +5,47 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- A 240px-wide variant for board list thumbnails, and a rewrite of the list API's `thumbnail`
+  field to point at it. List thumbnails are drawn in an 80x80 CSS px box, but until now the list
+  sent the untouched original — on one board's first page that was 3.5 MiB of image for eight
+  80x80 squares, with sources as large as 2000px wide. The `thumbnail` field is replaced only when
+  its value is exactly an editor image address and a ready 240 variant exists for that hash;
+  external addresses, attachment previews, `null` and anything else are left alone, and a hash with
+  no 240 variant keeps the original address. One query per response, regardless of how many rows
+  it holds.
+
+  Post bodies are untouched. Bodies still use the 960 variant as `src` with 960 and 1600 in
+  `srcset`; the 240 variant never appears there.
+
+- `--backfill-width=<width>` on `g7-image-delivery:build-variants`, with `--dry-run`, `--limit`
+  and a progress bar. Regular batches decide per original whether there is anything left to do, so
+  an original that already has a 960 variant is never revisited — adding a width to the plan would
+  not, on its own, produce a single new file for existing images. The backfill asks a different
+  question ("which originals lack this width?") and leaves the regular path alone. Newly uploaded
+  images continue to get all three widths from the ordinary batch.
+
+  Skip markers are re-examined by reason. `no_downscale_needed` means "not needed at the widths we
+  had", which a new width can change, so those originals are reconsidered. `source_pixel_cap` and
+  `gif_not_targeted` mean the original cannot be processed at any width and are left out. No
+  existing variant row, marker row or file is modified or deleted.
+
+### Changed
+
+- Width constants are now split by meaning: `BODY_BASE_WIDTH`, `BODY_SRCSET_WIDTHS`,
+  `BODY_MAX_WIDTH`, `THUMB_WIDTH` and `BUILD_WIDTHS`. Previously a single `NOMINAL_WIDTHS` list was
+  read positionally — `[0]` for the body `src` width and the last element for the maximum width —
+  so adding a smaller width to the front would have silently made post bodies load the 240px file,
+  and adding one to the end would have disabled the original `srcset` candidate. No index-based
+  access to a width list remains.
+
+- The variant route no longer hardcodes the allowed widths. It accepts a 2-4 digit width and the
+  controller checks it against `BUILD_WIDTHS`, so a future width change no longer needs the route
+  definition and the route cache to be kept in step with the constant.
+
 ## [0.1.1] - 2026-09-19
 
 ### Fixed

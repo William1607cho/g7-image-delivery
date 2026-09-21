@@ -298,6 +298,121 @@ class VariantBuilder
     }
 
     /**
+     * 특정 폭의 변환본이 빠진 기존 원본을 채웁니다 (0.2.0 백필).
+     *
+     * ## 왜 정규 경로로는 안 되는가
+     *
+     * 정규 후보 선정({@see self::pendingUploads()})은 **원본 단위**로 "볼 일이 남았는가" 를
+     * 판정한다 — `ready` 행이 하나라도 있거나 유효한 표식이 있으면 그 원본은 통째로
+     * 후보에서 빠진다. 폭 목록에 240 을 더해도 **이미 960 을 만들어 둔 원본은 영영
+     * 후보에 오르지 않는다**(blog 실측: 390건 전부 해당).
+     *
+     * 그래서 이 메서드는 "그 폭이 없는 원본" 이라는 **다른 질문**으로 후보를 뽑는다.
+     * 정규 경로는 손대지 않으므로, 새로 올라오는 업로드는 종전대로 표준 배치가 세 폭을
+     * 한 번에 만든다. 백필은 기존 원본을 위한 일회성 보정이다.
+     *
+     * ## 무엇을 건드리지 않는가
+     *
+     * 기존 `ready` 행과 표식 행은 **읽기만 한다.** 생성은
+     * {@see self::buildFor()} 에 맡기는데, 그쪽은 이미 있는 폭을 건너뛰므로
+     * 960·1600 파일과 행은 그대로 남는다. 표식 행도 갱신하지 않는다 — 폭이 또 늘어날 때
+     * 같은 방식으로 다시 판정할 수 있어야 하기 때문이다.
+     *
+     * @param  int  $width  채울 폭
+     * @param  int  $limit  이번 회차에 처리할 원본 수
+     * @param  bool  $dryRun  만들지 않고 계획만 낸다
+     * @param  ?callable(string, string, int, int): void  $onProgress  (해시, 상태, 진행, 총량)
+     * @return array{scanned: int, built: int, skipped: int, failed: int, eligible: int, items: list<array<string, mixed>>}
+     */
+    public function backfillWidth(int $width, int $limit, bool $dryRun = false, ?callable $onProgress = null): array
+    {
+        $result = [
+            'scanned' => 0, 'built' => 0, 'skipped' => 0, 'failed' => 0,
+            'eligible' => 0, 'items' => [],
+        ];
+
+        if (! $this->processor->isUsable()) {
+            $result['items'][] = ['status' => 'aborted', 'reason' => 'imagick_unavailable'];
+
+            return $result;
+        }
+
+        $result['eligible'] = $this->backfillCandidates($width)->count();
+        $quality = $this->quality();
+        $planned = min($result['eligible'], max(1, $limit));
+
+        foreach ($this->backfillCandidates($width, $limit)->get() as $upload) {
+            $result['scanned']++;
+            $outcome = $this->buildFor($upload, $quality, $dryRun);
+            $result['items'][] = $outcome;
+
+            match ($outcome['status']) {
+                'built', 'would_build' => $result['built']++,
+                'failed' => $result['failed']++,
+                default => $result['skipped']++,
+            };
+
+            if ($onProgress !== null) {
+                $onProgress(
+                    (string) $upload->hash,
+                    (string) ($outcome['status'] ?? '-'),
+                    $result['scanned'],
+                    $planned
+                );
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * 백필 대상 질의 (0.2.0).
+     *
+     * 대상 조건:
+     *  1. GIF 가 아니다 (정규 경로와 같은 규칙)
+     *  2. 그 폭의 `ready` 행이 없다
+     *  3. 원본 가로가 그 폭보다 크다 — 확대하지 않는다
+     *  4. 표식이 있다면 **폭에 따라 결론이 달라지는 사유**여야 한다
+     *     ({@see self::WIDTH_DEPENDENT_SKIP_REASONS}). `source_pixel_cap` ·
+     *     `gif_not_targeted` 는 폭과 무관하게 불가이므로 제외한다.
+     *
+     * 3번의 원본 가로는 기존 변환본·표식 행에 적힌 `src_width` 를 쓴다. 행이 하나도 없는
+     * 원본(= 아직 한 번도 처리되지 않음)은 정규 경로가 곧 집어가므로 백필 대상이 아니다.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder<Ckeditor5ImageUpload>
+     */
+    private function backfillCandidates(int $width, ?int $limit = null)
+    {
+        $table = (new ImageVariant)->getTable();
+
+        $query = Ckeditor5ImageUpload::query()
+            ->whereNotIn('mime_type', ['image/gif'])
+            // (2) 그 폭의 ready 행이 없다
+            ->whereNotExists(function ($q) use ($table, $width) {
+                $q->selectRaw('1')->from($table)
+                    ->whereColumn($table.'.upload_hash', 'ckeditor5_image_uploads.hash')
+                    ->where($table.'.width', $width)
+                    ->where($table.'.status', ImageVariant::STATUS_READY);
+            })
+            // (3) 원본 가로가 그 폭보다 크다 — 기존 행에 적힌 src_width 기준
+            ->whereExists(function ($q) use ($table, $width) {
+                $q->selectRaw('1')->from($table)
+                    ->whereColumn($table.'.upload_hash', 'ckeditor5_image_uploads.hash')
+                    ->where($table.'.src_width', '>', $width);
+            })
+            // (4) 폭과 무관하게 불가인 표식이 붙어 있으면 제외
+            ->whereNotExists(function ($q) use ($table) {
+                $q->selectRaw('1')->from($table)
+                    ->whereColumn($table.'.upload_hash', 'ckeditor5_image_uploads.hash')
+                    ->where($table.'.status', ImageVariant::STATUS_SKIPPED)
+                    ->whereNotIn($table.'.skip_reason', self::WIDTH_DEPENDENT_SKIP_REASONS);
+            })
+            ->orderBy('id');
+
+        return $limit !== null ? $query->limit(max(1, $limit)) : $query;
+    }
+
+    /**
      * 지금 유효한 표식 행의 수 (dry-run 보고용).
      */
     public function markedCount(): int
@@ -356,6 +471,24 @@ class VariantBuilder
         'no_downscale_needed',
         'source_pixel_cap',
         'gif_not_targeted',
+    ];
+
+    /**
+     * 표식 사유 중 **"그 폭에서는 필요 없었다"** 에 해당하는 것 (0.2.0).
+     *
+     * `no_downscale_needed` 는 "원본이 그때의 공칭 폭보다 작거나 같다" 는 뜻이라,
+     * **폭 목록이 달라지면 결론이 달라진다.** 240 을 더한 지금, 가로 241~960 원본은
+     * 960 기준으로는 여전히 불필요하지만 240 기준으로는 만들어야 한다.
+     *
+     * 나머지 둘은 폭과 무관하게 **원본 자체를 다룰 수 없다**는 뜻이므로 폭이 늘어도
+     * 결론이 그대로다:
+     *  - `source_pixel_cap`  : 원본 픽셀 수가 처리 상한을 넘어 열지조차 못한다
+     *  - `gif_not_targeted`  : GIF 는 애니메이션 프레임이 깨져 대상이 아니다
+     *
+     * 백필은 이 목록에 있는 사유만 다시 판정하고, 나머지 표식은 건드리지 않는다.
+     */
+    private const WIDTH_DEPENDENT_SKIP_REASONS = [
+        'no_downscale_needed',
     ];
 
     private function variantExists(string $hash, int $width): bool
