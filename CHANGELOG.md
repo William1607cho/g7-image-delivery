@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - Unreleased
+
+### Added
+
+- **Public contract for other extensions**:
+  `Plugins\G7\Image\Delivery\PublicApi\ThumbnailVariants::lookup(array $urls)` (`VERSION = 1`).
+  Given image addresses, it returns for each one whether ready variants exist, the variants by
+  nominal width (240, 960, 1600 — whichever exist) with their public URL and pixel size, and the
+  original's width, height and MIME type. It uses the same target rule as the list `thumbnail`
+  rewrite (an exact editor image address). When there is no variant yet, the address is not a
+  target, or "Enable Body Image Rewriting" is off, the entry says so (`available: false`) instead
+  of echoing the original address — the caller decides what to show. One query per call regardless
+  of how many addresses it gets (up to 200); no permission checks, as callers never pass addresses
+  of images the viewer may not see. g7-home-widgets 0.4.2 uses it for its gallery and webzine
+  widgets.
+
+### Unchanged
+
+- Board list responses, post and comment body rewriting, variant building and pruning behave
+  exactly as in 0.2.0. The new contract only reads the variants table.
+
 ## [0.2.0] - 2026-09-21
 
 ### Added
