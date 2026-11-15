@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Variant builds could stall for up to a day after a forced stop.** From Gnuboard7 core 7.1.5,
+  extension scheduled tasks get overlap protection by default, with a lock that expires after
+  1440 minutes. If the ten-minute `build-variants` run was killed mid-way (container replaced,
+  core update, out of memory), its lock stayed behind and every following run was skipped until
+  the lock expired, so new posts got no 240/960/1600 variants for up to 24 hours (originals were
+  still served, nothing broke on screen). The task now declares `without_overlapping => 30`, so a
+  leftover lock expires after 30 minutes. 30 minutes is longer than the worst case of one run
+  (20 originals × 3 widths × the 20-second imagick time limit per image ≈ 20 minutes); real runs
+  take about a second. The daily `prune-variants` task keeps the core default.
+- On core 7.1.4 and earlier the new key is ignored and behaviour is unchanged.
+
 ## [0.3.0] - 2026-09-27
 
 ### Added

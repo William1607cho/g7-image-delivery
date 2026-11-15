@@ -111,6 +111,11 @@ class Plugin extends AbstractPlugin
      * 변환본 생성은 10분마다 소량씩 — 한 번에 몰아 돌리면 큰 원본에서 CPU 가 튄다.
      * 정리는 하루 한 번이면 충분하다(공개 경로가 요청 시점에 원본 존재를 이미 확인한다).
      *
+     * 변환본 생성의 중복 실행 잠금은 30분 뒤 만료되도록 적는다(0.3.1). 코어 7.1.5 부터
+     * 확장 예약 작업에 잠금이 기본(1440분)으로 걸려, 실행 중 프로세스가 강제 종료되면
+     * 최대 하루 동안 다음 회차를 건너뛴다. 30분은 한 회차의 구조상 상한(원본 20건 × 폭 3종
+     * × 건당 imagick 시간 한도 20초 ≈ 20분)보다 길다. 7.1.4 이하 코어는 이 키를 읽지 않는다.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function getSchedules(): array
@@ -121,6 +126,7 @@ class Plugin extends AbstractPlugin
                 'schedule' => '*/10 * * * *',
                 'description' => '중간 크기 변환본을 미생성분부터 소량씩 생성',
                 'enabled_config' => 'variants_enabled',
+                'without_overlapping' => 30,
             ],
             [
                 'command' => 'g7-image-delivery:prune-variants --scheduled',
